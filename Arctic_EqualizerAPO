@@ -1,0 +1,187 @@
+#
+# Advanced Stereo Configuration with Extensive Crossfeed Control
+# Features: Multi-band crossfeed, frequency-dependent mixing, variable delay, and spatial enhancement
+#
+
+Stage: pre-mix
+If: inputChannelCount == 2
+  
+  # ============ CROSSFEED PARAMETERS ============
+  # Master controls
+  Eval: CROSSFEED_ENABLE = 1
+  Eval: CROSSFEED_AMOUNT = 0.20        # Overall crossfeed level (0.0 - 1.0)
+  Eval: CROSSFEED_DRY_WET = 0.85       # Dry/wet mix (1.0 = full wet)
+  
+  # Frequency-specific crossfeed (for more natural sound)
+  Eval: CROSSFEED_LOW = 0.10           # Crossfeed for bass (< 250 Hz)
+  Eval: CROSSFEED_MID = 0.20           # Crossfeed for mids (250 - 4000 Hz)
+  Eval: CROSSFEED_HIGH = 0.30          # Crossfeed for highs (> 4000 Hz)
+  Eval: CROSSFEED_CROSSOVER_LOW = 250 Hz
+  Eval: CROSSFEED_CROSSOVER_HIGH = 4000 Hz
+  
+  # Delay parameters (simulates natural head shadow)
+  Eval: CROSSFEED_DELAY = 0.5 ms       # Time delay for crossfed signal
+  Eval: CROSSFEED_DELAY_LOW = 0.3 ms   # Less delay for bass
+  Eval: CROSSFEED_DELAY_HIGH = 0.7 ms  # More delay for highs
+  
+  # Filtering for crossfed signal (makes it sound more natural)
+  Eval: CROSSFEED_HP = 50 Hz           # High-pass filter for crossfed signal
+  Eval: CROSSFEED_LP = 12000 Hz        # Low-pass filter for crossfed signal
+  Eval: CROSSFEED_TILT = -3 dB         # Tilt EQ (negative = darker)
+  
+  # Spatial enhancement parameters
+  Eval: WIDTH_AMOUNT = 0.15            # Stereo width enhancement (-1.0 to 1.0)
+  Eval: CENTER_LEVEL = 1.0             # Center channel level
+  Eval: SIDE_LEVEL = 1.2               # Side channel level (for widening)
+  
+  # ============ SIGNAL PROCESSING ============
+  
+  # Create frequency bands for multi-band crossfeed
+  Copy: Left_Low = LowPass(Left, CROSSFEED_CROSSOVER_LOW)
+  Copy: Left_Mid = BandPass(Left, CROSSFEED_CROSSOVER_LOW, CROSSFEED_CROSSOVER_HIGH)
+  Copy: Left_High = HighPass(Left, CROSSFEED_CROSSOVER_HIGH)
+  
+  Copy: Right_Low = LowPass(Right, CROSSFEED_CROSSOVER_LOW)
+  Copy: Right_Mid = BandPass(Right, CROSSFEED_CROSSOVER_LOW, CROSSFEED_CROSSOVER_HIGH)
+  Copy: Right_High = HighPass(Right, CROSSFEED_CROSSOVER_HIGH)
+  
+  # Apply frequency-specific crossfeed with delays
+  # Left to Right crossfeed
+  Copy: Cross_Low_LR = Left_Low * CROSSFEED_LOW
+  Copy: Cross_Mid_LR = Left_Mid * CROSSFEED_MID
+  Copy: Cross_High_LR = Left_High * CROSSFEED_HIGH
+  
+  # Right to Left crossfeed
+  Copy: Cross_Low_RL = Right_Low * CROSSFEED_LOW
+  Copy: Cross_Mid_RL = Right_Mid * CROSSFEED_MID
+  Copy: Cross_High_RL = Right_High * CROSSFEED_HIGH
+  
+  # Apply delays to crossfed signals
+  Filter: Cross_Low_LR Delay CROSSFEED_DELAY_LOW
+  Filter: Cross_Low_RL Delay CROSSFEED_DELAY_LOW
+  Filter: Cross_Mid_LR Delay CROSSFEED_DELAY
+  Filter: Cross_Mid_RL Delay CROSSFEED_DELAY
+  Filter: Cross_High_LR Delay CROSSFEED_DELAY_HIGH
+  Filter: Cross_High_RL Delay CROSSFEED_DELAY_HIGH
+  
+  # Filter crossfed signals for naturalness
+  Filter: Cross_Low_LR HP Fc CROSSFEED_HP Q 0.7
+  Filter: Cross_Low_RL HP Fc CROSSFEED_HP Q 0.7
+  Filter: Cross_High_LR LP Fc CROSSFEED_LP Q 0.7
+  Filter: Cross_High_RL LP Fc CROSSFEED_LP Q 0.7
+  
+  # Apply tilt EQ to crossfed signals
+  Filter: Cross_Low_LR Gain CROSSFEED_TILT * 0.5
+  Filter: Cross_Low_RL Gain CROSSFEED_TILT * 0.5
+  Filter: Cross_Mid_LR Gain CROSSFEED_TILT * 0.3
+  Filter: Cross_Mid_RL Gain CROSSFEED_TILT * 0.3
+  
+  # Combine crossfed signals
+  Copy: Cross_Left = Cross_Low_RL + Cross_Mid_RL + Cross_High_RL
+  Copy: Cross_Right = Cross_Low_LR + Cross_Mid_LR + Cross_High_LR
+  
+  # Scale by master amount
+  Copy: Cross_Left = Cross_Left * CROSSFEED_AMOUNT
+  Copy: Cross_Right = Cross_Right * CROSSFEED_AMOUNT
+  
+  # Mix dry and wet signals
+  Copy: Left_Cross = (Left * CROSSFEED_DRY_WET) + (Cross_Left * (1 - CROSSFEED_DRY_WET))
+  Copy: Right_Cross = (Right * CROSSFEED_DRY_WET) + (Cross_Right * (1 - CROSSFEED_DRY_WET))
+  
+  # ============ STEREO WIDTH ENHANCEMENT ============
+  # Mid/Side processing
+  Copy: Mid = (Left_Cross + Right_Cross) * 0.5
+  Copy: Side = (Left_Cross - Right_Cross) * 0.5
+  
+  # Apply width adjustment (only if enabled)
+  If: WIDTH_AMOUNT != 0
+    Eval: WIDTH_FACTOR = 1 + WIDTH_AMOUNT
+    Copy: Side = Side * WIDTH_FACTOR
+  EndIf:
+  
+  # Reconstruct with adjusted width
+  Copy: Left_Width = Mid + Side
+  Copy: Right_Width = Mid - Side
+  
+  # ============ SPEAKER FILL (Upmixing) ============
+  # Center channel
+  Copy: Center = Left_Width + Right_Width
+  
+  # Surround channels (difference signals)
+  Copy: LDiff = Left_Width + -1.0 * Right_Width
+  Copy: RDiff = Right_Width + -1.0 * Left_Width
+  
+  # Scale surround channels
+  Copy: SL = 0.35 * LDiff
+  Copy: SR = 0.35 * RDiff
+  Copy: SL = SL * SIDE_LEVEL
+  Copy: SR = SR * SIDE_LEVEL
+  Channel: SL SR
+  Filter: SL HP Fc 80 Hz Q 0.7
+  Filter: SR HP Fc 80 Hz Q 0.7
+  
+  # ============ BASS MANAGEMENT ============
+  If: outputChannelCount > 4
+    # Center channel with bass management
+    Copy: C = 0.5 * Center
+    Copy: C = C * CENTER_LEVEL
+    Filter: C HP Fc 80 Hz Q 0.7
+    
+    # Subwoofer processing
+    Copy: LFE = 0.0
+    Copy: LFE += LowPass(Left_Width, 120 Hz) * 0.7
+    Copy: LFE += LowPass(Right_Width, 120 Hz) * 0.7
+    Copy: LFE += LowPass(Center, 120 Hz) * 0.5
+    
+    # Subwoofer compression for tight bass
+    Filter: LFE Compressor Threshold -18 dB Ratio 3.0 Attack 10 ms Release 200 ms
+    Filter: LFE Gain -3 dB
+  EndIf:
+  
+  # ============ SURROUND BACK CHANNELS (7.1) ============
+  If: outputChannelCount > 6
+    Copy: RL = SL * 0.8
+    Copy: RR = SR * 0.8
+    
+    # Add ambient processing to rear channels
+    Filter: RL Gain -3 dB
+    Filter: RR Gain -3 dB
+    Filter: RL Delay 15 ms
+    Filter: RR Delay 15 ms
+    Filter: RL HP Fc 100 Hz Q 0.7
+    Filter: RR HP Fc 100 Hz Q 0.7
+    Filter: RL LP Fc 8000 Hz Q 0.7
+    Filter: RR LP Fc 8000 Hz Q 0.7
+    
+    # Slight reverb for rear channels
+    Filter: RL Reverb RoomSize 20 StereoWidth 50
+    Filter: RR Reverb RoomSize 20 StereoWidth 50
+  EndIf:
+  
+  # ============ APPLY FINAL SIGNALS ============
+  Copy: Left = Left_Width
+  Copy: Right = Right_Width
+
+EndIf:
+
+# ============ POST-PROCESSING ============
+Stage: post-mix
+
+# Multi-band compressor for overall polish
+Filter: ON Compressor 
+  InputGain 0 dB
+  Threshold -12 dB
+  Ratio 2.0
+  Attack 5 ms
+  Release 100 ms
+  Channel LR
+
+# Final EQ (customize for your headphones/speakers)
+# Filter: ON Preamp -1 dB
+# Filter: ON GraphicEQ: 31 -1.5; 62 -1.0; 125 0.0; 250 0.5; 500 0.0; 1000 0.0; 2000 1.0; 4000 1.5; 8000 0.5; 16000 0.0
+
+# Room simulation (subtle)
+Filter: ON Reverb RoomSize 12 StereoWidth 80 WetDryMix 8
+
+# Safety limiter
+Filter: ON Limiter Threshold -0.3 dB Attack 0.1 ms Release 10 ms
